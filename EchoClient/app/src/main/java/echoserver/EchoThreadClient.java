@@ -1,4 +1,4 @@
-package echoclient;
+package echoserver;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -12,6 +12,7 @@ public class EchoThreadClient {
         Scanner scanner = new Scanner(System.in);
 
         // 자원 자동 해제를 위한 try-with-resources
+        // try (Socket socket = new Socket("192.168.30.", 12345)) { // 서버 포트 12345로 수정
         try (Socket socket = new Socket("localhost", 12345)) { // 서버 포트 12345로 수정
             System.out.println("Connected to server: " + socket.getRemoteSocketAddress());
 
