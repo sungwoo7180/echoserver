@@ -19,7 +19,7 @@ public class NioEchoServer2 {
     private static final int WRITE_THREADS = 5; // Write 전용 스레드 수
     // private static final int MAX_BYTES = 256; // 메시지 최대 크기 (256바이트 제한)
 
-    // Read 와 Write 작업을 위한 큐 (멀티스레드 환경에서 동기화된 큐 사용)
+    // Read 와 Write 작업을 위한 큐 (멀티스레드 환경에서 동기화된 큐 사용) : read/write 별도로 분리하면 작업 유형에 따라 스레드를 전문화 가능
     private static final LinkedBlockingQueue<SelectionKey> readQueue = new LinkedBlockingQueue<>();
     private static final LinkedBlockingQueue<SelectionKey> writeQueue = new LinkedBlockingQueue<>();
     private static final AtomicInteger threadCounter = new AtomicInteger(1); // 쓰레드 번호 할당기 (for 디버깅)
@@ -37,6 +37,15 @@ public class NioEchoServer2 {
         for (int i = 0; i < READ_THREADS; i++) {
             int threadId = threadCounter.getAndIncrement();
             workerPool.submit(() -> processReadTasks(threadId));
+            /*
+            // (2) Runnable 인라인 오버라이딩 (익명 객체)
+            workerPool.submit(new Runnable() {
+                @Override
+                public void run() {
+                    processReadTasks(threadId);
+                }
+            });
+            */
             System.out.println("Read Worker " + threadId + " 생성");
         }
 
@@ -52,13 +61,16 @@ public class NioEchoServer2 {
 
             serverSocket.configureBlocking(false);                      // 논블로킹 모드 설정
             serverSocket.bind(new InetSocketAddress(PORT));             // 2. bind() : 포트 바인딩
+            // bind() 를 하는 이유? 서버 소켓이 특정 포트와 인터페이스에 연결되도록 설정하는 과정, bind() 없이 서버를 실행하면,
+            // 클라이언트가 서버를 찾을 수 없어서 통신이 불가능함.
             serverSocket.register(selector, SelectionKey.OP_ACCEPT);    // Accept 이벤트 감지 등록 -> SelectionKey 생성
             // 3. listen()을 Selector 에게 양도
 
             System.out.println("서버가 포트 " + PORT + "에서 실행 중입니다...");
 
             while (true) {
-                selector.select(); // 이벤트 발생할 때까지 대기 (Blocking 상태) 3. listen()
+                                    // 이벤트 발생할 때까지 대기 (Blocking 상태) 3. listen()
+                selector.select();  // ** 이벤트가 있는 소켓만 선택 **
 
                 // SelectionKey 는 채널과 이벤트를 연결하는 객체.
                 Iterator<SelectionKey> keyIterator = selector.selectedKeys().iterator();
@@ -71,9 +83,9 @@ public class NioEchoServer2 {
                         continue;               // 유효하지 않은 키는 무시하고 다시 while 문 처음으로
                     }
                     try {
-                        if (key.isAcceptable()) {           // 클라이언트 연결 요청(Accept)이 발생했을 때
+                        if (key.isAcceptable()) {           // 클라이언트 connect(), 서버가 accept() 가능할때
                             handleAccept(key, selector);    // 클라이언트 연결 처리
-                        } else if (key.isReadable()) {
+                        } else if (key.isReadable()) {      // 데이터가 준비된 소켓만 읽음
                             readQueue.offer(key);           // Read 작업 큐에 추가
                         } else if (key.isWritable()) {
                             writeQueue.offer(key);          // Write 작업 큐에 추가
@@ -96,7 +108,7 @@ public class NioEchoServer2 {
     // 클라이언트의 연결 요청을 처리하는 메서드
     private static void handleAccept(SelectionKey key, Selector selector) throws IOException {
 
-        // 현재 SelectionKey 가 관리하는 채널을 가져와 ServerSocketChannel 로 캐스팅
+        // *** 현재 SelectionKey 가 관리하는 채널을 가져와 ServerSocketChannel 로 캐스팅 ***
         ServerSocketChannel serverSocket = (ServerSocketChannel) key.channel();
 
         SocketChannel clientSocket = serverSocket.accept(); // 4. accept() 클라이언트 연결 수락
