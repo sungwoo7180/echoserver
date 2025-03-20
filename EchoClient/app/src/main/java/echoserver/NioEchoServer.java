@@ -24,7 +24,7 @@ public class NioEchoServer {
             serverSocket.configureBlocking(false);
             // 지정된 포트에 바인딩하여 클라이언트의 연결을 대기
             serverSocket.bind(new InetSocketAddress(PORT));
-            // 서버 소켓을 Selector에 등록하여 ACCEPT 이벤트 감지 ( 클라이언트의 연결을 감지 )
+            // 서버 소켓을 Selector 에 등록하여 ACCEPT 이벤트 감지 ( 클라이언트의 연결을 감지 )
             serverSocket.register(selector, SelectionKey.OP_ACCEPT);
 
             System.out.println("서버가 포트 " + PORT + "에서 실행 중입니다...");
@@ -62,7 +62,7 @@ public class NioEchoServer {
         // 클라이언트 연결 수락
         SocketChannel clientSocket = serverSocket.accept();
         clientSocket.configureBlocking(false); // 논블로킹 모드 설정
-        // 클라이언트 소켓을 Selector에 등록 (Read 이벤트 감지)
+        // 클라이언트 소켓을 Selector 에 등록 (Read 이벤트 감지)
         clientSocket.register(selector, SelectionKey.OP_READ, ByteBuffer.allocate(BUFFER_SIZE));
         System.out.println("클라이언트 연결 수락: " + clientSocket.getRemoteAddress());
     }

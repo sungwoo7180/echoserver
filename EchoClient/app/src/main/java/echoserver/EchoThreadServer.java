@@ -76,6 +76,7 @@ public class EchoThreadServer {
             System.out.printf("[%s] %s Connected\n", sdf.format(new Date()), clientId);
             // 클라이언트 데이터 읽기 (readLine 은 개행 기준)
             while ((line = reader.readLine()) != null) { // 클라이언트 연결 종료 시 null 반환
+                // line = reader.readLine(); // *** 여기서 데이터가 들어올 때까지 스레드가 멈춤! *** - 그래서 blocking I/O
                 System.out.printf("[%s] From %s: %s\n", sdf.format(new Date()), clientId, line);
 
                 if ("quit".equals(line)) {

@@ -14,6 +14,7 @@ public class EchoClient {
     public static void main(String[] args) {
         try (
                 // Socket socket = new Socket("192.168.30.36", 12346);
+                // 1. socket() 소켓을 만듬과 동시에 생성자에서 2, connect() 까지 같이 수행함.
                 Socket socket = new Socket("localhost", 12346);
 
                 Scanner scanner = new Scanner(System.in);
