@@ -20,8 +20,8 @@ public class NioEchoServer2 {
     // private static final int MAX_BYTES = 256; // 메시지 최대 크기 (256바이트 제한)
 
     // Read 와 Write 작업을 위한 큐 (멀티스레드 환경에서 동기화된 큐 사용) : read/write 별도로 분리하면 작업 유형에 따라 스레드를 전문화 가능
-    private static final LinkedBlockingQueue<SelectionKey> readQueue = new LinkedBlockingQueue<>();
-    private static final LinkedBlockingQueue<SelectionKey> writeQueue = new LinkedBlockingQueue<>();
+    private static final LinkedBlockingQueue<SelectionKey> readQueue = new LinkedBlockingQueue<>(1000);
+    private static final LinkedBlockingQueue<SelectionKey> writeQueue = new LinkedBlockingQueue<>(1000);
     private static final AtomicInteger threadCounter = new AtomicInteger(1); // 쓰레드 번호 할당기 (for 디버깅)
 
     public static void main(String[] args) {
@@ -36,7 +36,10 @@ public class NioEchoServer2 {
         // Read 전용 스레드 실행 ( 1번 2번 3번 4번 5번 )
         for (int i = 0; i < READ_THREADS; i++) {
             int threadId = threadCounter.getAndIncrement();
-            workerPool.submit(() -> processReadTasks(threadId));
+            workerPool.submit(() -> {
+                System.out.println("read Worker " + threadId + " 실행 (Thread ID: " + Thread.currentThread().getId() + ")");
+                processReadTasks(threadId);
+            });
             /*
             // (2) Runnable 인라인 오버라이딩 (익명 객체)
             workerPool.submit(new Runnable() {
@@ -52,7 +55,10 @@ public class NioEchoServer2 {
         // Write 전용 스레드 실행 ( 6번 7번 8번 9번 10번 )
         for (int i = 0; i < WRITE_THREADS; i++) {
             int threadId = threadCounter.getAndIncrement();
-            workerPool.submit(() -> processWriteTasks(threadId));
+            workerPool.submit(() -> {
+                System.out.println("write Worker " + threadId + " 실행 (Thread ID: " + Thread.currentThread().getId() + ")");
+                processWriteTasks(threadId);
+            });
             System.out.println("Write Worker " + threadId + " 생성");
         }
 
@@ -63,14 +69,14 @@ public class NioEchoServer2 {
             serverSocket.bind(new InetSocketAddress(PORT));             // 2. bind() : 포트 바인딩
             // bind() 를 하는 이유? 서버 소켓이 특정 포트와 인터페이스에 연결되도록 설정하는 과정, bind() 없이 서버를 실행하면,
             // 클라이언트가 서버를 찾을 수 없어서 통신이 불가능함.
-            serverSocket.register(selector, SelectionKey.OP_ACCEPT);    // Accept 이벤트 감지 등록 -> SelectionKey 생성
+            serverSocket.register(selector, SelectionKey.OP_ACCEPT);    // accept 이벤트 감지 등록 -> SelectionKey 생성
             // 3. listen()을 Selector 에게 양도
 
             System.out.println("서버가 포트 " + PORT + "에서 실행 중입니다...");
 
             while (true) {
                                     // 이벤트 발생할 때까지 대기 (Blocking 상태) 3. listen()
-                selector.select();  // ** 이벤트가 있는 소켓만 선택 **
+                selector.select();  // ** 이벤트가 있는 소켓만 선택 **     // selector 에 timeout 을 주는 방법도 있다.
 
                 // SelectionKey 는 채널과 이벤트를 연결하는 객체.
                 Iterator<SelectionKey> keyIterator = selector.selectedKeys().iterator();
@@ -129,7 +135,7 @@ public class NioEchoServer2 {
                 // take() 는 블로킹 메소드임, 큐가 비어있으면 작업이 들어올때까지 Thread 가 대기함.
                 // 여러 개의 Read Thread 가 있지만, 한 번에 하나의 스레드만 큐에서 key 를 가져가서 처리하게 됩니다.
                 // 각각의 작업을 하나의 스레드만 가져갈 수 있도록 동작하므로 Race Condition 은 발생하지 않습니다.
-                // System.out.println("[Thread " + threadId + "] Read 처리 중...");
+                // System.out.println("[Thread " + threadId + "번 - " + Thread.currentThread().getId() + "] read 처리 중...");
                 handleRead(key, threadId);
             } catch (InterruptedException | IOException e) {
                 Thread.currentThread().interrupt();
@@ -144,7 +150,7 @@ public class NioEchoServer2 {
         while (true) {
             try {
                 SelectionKey key = writeQueue.take(); // ***Write 작업 큐에서 가져옴***
-                // System.out.println("[Thread " + threadId + "] Write 처리 중...");
+                System.out.println("[Thread " + threadId + "번 - " + Thread.currentThread().getId() + "] Write 처리 중...");
                 handleWrite(key);
             } catch (InterruptedException | IOException e) {
                 Thread.currentThread().interrupt();
@@ -162,6 +168,7 @@ public class NioEchoServer2 {
             int bytesRead = channel.read(buffer);
             if (bytesRead == -1) {  //
                 System.out.println("클라이언트 연결 종료: " + channel.getRemoteAddress());
+                key.cancel();
                 channel.close();
                 return;
             }
@@ -172,6 +179,7 @@ public class NioEchoServer2 {
             String message = new String(bytes).trim();
 
             if (!message.isEmpty()) {
+                System.out.println("[Thread " + threadId + "] 클라이언트(" + channel.getRemoteAddress() + ") 메시지: " + message);
                 System.out.println("[Thread " + Thread.currentThread().getId() + "] 클라이언트(" + channel.getRemoteAddress() + ") 메시지: " + message);
 
                 // **Write Queue 에 단 한 번만 추가**
