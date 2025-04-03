@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class NioEchoServer2 {
     private static final int PORT = 12345; // 서버가 사용할 포트 번호
-    private static final int BUFFER_SIZE = 1024; // 버퍼 크기 설정
+    private static final int BUFFER_SIZE = 10000000; // 버퍼 크기 설정
     private static final int WORKER_THREADS = 10; // 작업자(Worker) 스레드 개수 ( 2개 Read, 2개 Write )
     private static final int READ_THREADS = 5;  // Read 전용 스레드 수
     private static final int WRITE_THREADS = 5; // Write 전용 스레드 수
@@ -135,7 +135,7 @@ public class NioEchoServer2 {
                 // take() 는 블로킹 메소드임, 큐가 비어있으면 작업이 들어올때까지 Thread 가 대기함.
                 // 여러 개의 Read Thread 가 있지만, 한 번에 하나의 스레드만 큐에서 key 를 가져가서 처리하게 됩니다.
                 // 각각의 작업을 하나의 스레드만 가져갈 수 있도록 동작하므로 Race Condition 은 발생하지 않습니다.
-                // System.out.println("[Thread " + threadId + "번 - " + Thread.currentThread().getId() + "] read 처리 중...");
+                System.out.println("[Thread " + threadId + "번 - " + Thread.currentThread().getId() + "] read 처리 중...");
                 handleRead(key, threadId);
             } catch (InterruptedException | IOException e) {
                 Thread.currentThread().interrupt();
@@ -179,8 +179,7 @@ public class NioEchoServer2 {
             String message = new String(bytes).trim();
 
             if (!message.isEmpty()) {
-                System.out.println("[Thread " + threadId + "] 클라이언트(" + channel.getRemoteAddress() + ") 메시지: " + message);
-                System.out.println("[Thread " + Thread.currentThread().getId() + "] 클라이언트(" + channel.getRemoteAddress() + ") 메시지: " + message);
+                System.out.println("[Thread " + threadId + "번 - " + Thread.currentThread().getId() + "] 클라이언트(" + channel.getRemoteAddress() + ") 메시지: " + message);
 
                 // **Write Queue 에 단 한 번만 추가**
                 ByteBuffer responseBuffer = ByteBuffer.wrap(("Echo: " + message).getBytes());
