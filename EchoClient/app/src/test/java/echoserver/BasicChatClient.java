@@ -4,7 +4,7 @@ import java.io.*;
 import java.lang.Thread;
 import java.net.*;
 
-public class ChatClient {
+public class BasicChatClient {
     private static final String SERVER_IP = "127.0.0.1";
     private static final int SERVER_PORT = 12346;
 

@@ -5,7 +5,7 @@ import java.lang.Thread;
 import java.net.*;
 import java.util.*;
 
-public class ChatServer {
+public class BasicChatServer {
     private static Map<String, Set<ClientHandler>> rooms = Collections.synchronizedMap(new HashMap<>());
     private static Map<String, List<String>> chatHistory = Collections.synchronizedMap(new HashMap<>());
 
