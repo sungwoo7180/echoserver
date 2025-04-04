@@ -20,14 +20,14 @@ public class ChatServer {
     private static final int POOL_SIZE = 10;
     private static final int BUFFER_SIZE = 1024;
 
-    private static final String TEXTPATH = "app/src/test/java/echoserver/main/text/chathistory.txt"; // TODO 수정 필요
-    private static final String NICKNAMEPATH = "app/src/test/java/echoserver/main/text/nickname.txt"; // TODO 수정 필요
+    private static final String TEXTPATH = "app/src/test/java/echoserver/main/text/chathistory.txt";
+    private static final String NICKNAMEPATH = "app/src/test/java/echoserver/main/text/nickname.txt";
 
     private static final ExecutorService workerPool = Executors.newFixedThreadPool(POOL_SIZE);
     private static final AtomicInteger threadCounter = new AtomicInteger(1);    // 스레드 번호 부여기
     private static final Map<Long, Integer> threadIdMap = new ConcurrentHashMap<>();     // 실제 Thread ID -> 넘버링
-    private static final Set<String> nicknames = new ConcurrentSkipListSet<>();
-
+    private static final Set<String> allUsers = new ConcurrentSkipListSet<>();
+    private static final Set<String> activeUsers = new ConcurrentSkipListSet<>();
     private static FileOutputStream nicknameOutputStream;                                // 닉네임 저장
     private static FileOutputStream chatOutputStream;                                    // 채팅 내역 저장
 
@@ -76,15 +76,16 @@ public class ChatServer {
         }
     }
 
+    // 서버 시작 시 nickname.txt -> allUsers 에 로딩
     private static void onLoad() {
         // 중복 닉네임 체크를 위해서 Nickname.txt 에서 Set 으로 들고 오기
         try (BufferedReader reader = new BufferedReader(new FileReader(NICKNAMEPATH))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                nicknames.add(line.trim()); // 공백 제거 후 Set 에 추가
+                allUsers.add(line.trim()); // 공백 제거 후 Set 에 추가
                 // System.out.println(line);
             }
-            System.out.println("Loaded " + nicknames.size() + " nicknames");
+            System.out.println("Loaded " + allUsers.size() + " historical nicknames");
         } catch ( Exception e ) {
             System.err.println("[onLoad ERROR] 닉네임 로드 실패: " + e.getMessage());
         }
@@ -131,7 +132,7 @@ public class ChatServer {
                 buffer.flip();
                 byte[] bytes = new byte[buffer.remaining()];
                 buffer.get(bytes);
-                String message = new String(bytes).trim();
+                String receivedData = new String(bytes, StandardCharsets.UTF_8);
 
 //                if (!message.isEmpty()) {
 //                    System.out.println("[Thread " + threadNum + "] 클라이언트(" + clientChannel.getRemoteAddress() + ")메시지: " + message);
@@ -141,28 +142,51 @@ public class ChatServer {
 //                    }
 //                    System.out.println("[Thread " + threadNum + "] 클라이언트(" + clientChannel.getRemoteAddress() + ")에게 응답 전송 완료");
 //                }
-                if (!message.isEmpty()) {
+                String[] messages = receivedData.split("\n");
+                for (String rawMsg : messages) {
+                    String message = rawMsg.trim();
+                    if (message.isEmpty()) continue;
+
                     if (!clientInfo.isRegistered()) {
-                        if (!nicknames.contains(message)) {
-                            clientInfo.setNickname(message);
-                            clientInfo.setRegistered(true);
-                            nicknames.add(message);
-                            nicknameOutputStream.write((message + "\n").getBytes(StandardCharsets.UTF_8));
-                            nicknameOutputStream.flush();
-                            System.out.println("[Thread " + threadNum + "] 닉네임 등록: " + message);
-                        } else {
+                        if (activeUsers.contains(message)) {
                             clientChannel.write(ByteBuffer.wrap("[SERVER] 중복된 닉네임입니다.\n".getBytes()));
                             cleanupKey(key);
                             return;
                         }
-                    } else {
-                        System.out.println("[Thread " + threadNum + "] (" + clientInfo.getNickname() + ") 메시지: " + message);
-                        ByteBuffer responseBuffer = ByteBuffer.wrap((clientInfo.getNickname() + ": " + message + "\n").getBytes());
-                        while (responseBuffer.hasRemaining()) {
-                            clientChannel.write(responseBuffer);
+
+                        clientInfo.setNickname(message);
+                        clientInfo.setRegistered(true);
+                        activeUsers.add(message);
+
+                        // 신규 유저는 history X
+                        if (!allUsers.contains(message)) {
+                            allUsers.add(message);
+                            nicknameOutputStream.write((message + "\n").getBytes(StandardCharsets.UTF_8));
+                            nicknameOutputStream.flush();
+                        } else {
+                            // 기존 유저 → history 20줄 전송
+                            Stack<String> history = readChatHistoryReversed(TEXTPATH, 20);
+                            while (!history.isEmpty()) {                    // 향상된 For 문 쓰면 안됨. List 처럼 똑같이 반환함.
+                                String line = history.pop();
+                                clientChannel.write(ByteBuffer.wrap((line + "\n").getBytes()));
+                            }
                         }
+
+                        System.out.println("[닉네임 등록] " + message);
+                        clientChannel.write(ByteBuffer.wrap(("[SERVER] '" + message + "' 닉네임 등록 완료!\n").getBytes()));
+                    } else {
+                        String nickname = clientInfo.getNickname();
+                        String timestamp = "[" + java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")) + "]";
+                        String fullMessage =  nickname + ": " + message + " " + timestamp + "\n";
+
+                        chatOutputStream.write(fullMessage.getBytes(StandardCharsets.UTF_8));
+                        chatOutputStream.flush();
+                        System.out.println("[브로드캐스트] " + fullMessage.trim());
+
+                        broadcastToAllClients(key.selector(), fullMessage);
                     }
                 }
+
                 buffer.clear();
             } catch (IOException e) {
                 cleanupKey(key);
@@ -170,23 +194,47 @@ public class ChatServer {
         }
     }
 
-    private static void cleanupKey(SelectionKey key) {
-        try {
-            System.out.println("[CLEANUP] 연결 정리 중: " + ((SocketChannel) key.channel()).getRemoteAddress());
-            key.cancel();
-            key.channel().close();
-        } catch (IOException ignore) {
+    private static void broadcastToAllClients(Selector selector, String message) {
+        ByteBuffer broadcastBuffer = ByteBuffer.wrap(message.getBytes(StandardCharsets.UTF_8));
+
+        for (SelectionKey key : selector.keys()) {
+            if (key.channel() instanceof SocketChannel && key.isValid()) {
+                try {
+                    SocketChannel sc = (SocketChannel) key.channel();
+                    broadcastBuffer.rewind(); // 다시 읽을 수 있도록 rewind
+                    sc.write(broadcastBuffer);
+                } catch (IOException e) {
+                    System.err.println("[BROADCAST ERROR] 클라이언트 전송 실패");
+                    cleanupKey(key);
+                }
+            }
         }
     }
 
+
+    private static void cleanupKey(SelectionKey key) {
+        try {
+            SocketChannel channel = (SocketChannel) key.channel();
+            ClientInfo info = (ClientInfo) key.attachment();
+
+            if (info != null && info.getNickname() != null) {
+                activeUsers.remove(info.getNickname());
+            }
+
+            System.out.println("[CLEANUP] 연결 종료: " + channel.getRemoteAddress());
+            key.cancel();
+            channel.close();
+        } catch (IOException ignore) {}
+    }
+
     // 최신순으로 채팅 내역을 20개 들고오는 method
-    public static List<String> readChatHistoryReversed(String filePath, int numberOfLines) throws IOException {
+    public static Stack<String> readChatHistoryReversed(String filePath, int numberOfLines) throws IOException {
         RandomAccessFile raf = new RandomAccessFile(filePath, "r");
-        long pointer = raf.length() - 1;    // 파일 크기 - 1 = 파일
-        List<String> result = new ArrayList<>();
+        long pointer = raf.length() - 1;    // raf.length() : 파일의 길이, pointer : 가리키는 index
+        Stack<String> stack = new Stack<>();    // List<String> result = new ArrayList<>();
         ByteArrayOutputStream lineBuffer = new ByteArrayOutputStream();
 
-        while (pointer >= 0 && result.size() < numberOfLines) {
+        while (pointer >= 0 && stack.size() < numberOfLines) {
             raf.seek(pointer);
             byte b = raf.readByte();
 
@@ -194,7 +242,7 @@ public class ChatServer {
             if (b == '\n') {
                 // 현재까지 모은 바이트는 거꾸로 되어 있으므로 뒤집기
                 byte[] lineBytes = reverseBytes(lineBuffer.toByteArray());
-                result.add(new String(lineBytes, StandardCharsets.UTF_8).trim());
+                stack.push(new String(lineBytes, StandardCharsets.UTF_8).trim());   //result.add(new String(lineBytes, StandardCharsets.UTF_8).trim());
                 lineBuffer.reset();  // 다음 줄을 위해 초기화
             } else {
                 lineBuffer.write(b);  // 거꾸로 읽기
@@ -205,12 +253,12 @@ public class ChatServer {
         // 파일 시작이면서 아직 라인이 남아있을 수 있으니 마지막 줄 처리
         if (lineBuffer.size() > 0) {
             byte[] lineBytes = reverseBytes(lineBuffer.toByteArray());
-            String line = new String(lineBytes, StandardCharsets.UTF_8);
-            result.add(line.trim());
+            stack.push(new String(lineBytes, StandardCharsets.UTF_8).trim());       //result.add(new String(lineBytes, StandardCharsets.UTF_8).trim());
         }
 
         raf.close();
-        return result;
+        // Collections.reverse(stack);   // List 로 받을 경우에 이런식으로 정렬.
+        return stack;
     }
 
     private static byte[] reverseBytes(byte[] input) {

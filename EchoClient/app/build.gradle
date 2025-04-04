@@ -23,6 +23,12 @@ dependencies {
 
     // This dependency is used by the application.
     implementation libs.guava
+
+    // Lombok 의존성 추가
+    compileOnly 'org.projectlombok:lombok:1.18.22'
+    annotationProcessor 'org.projectlombok:lombok:1.18.22'
+    // Lombok 을 처리할 수 있는 플러그인 추가 (Optional)
+    implementation 'org.projectlombok:lombok:1.18.22'
 }
 
 // Apply a specific Java toolchain to ease working on different environments.
