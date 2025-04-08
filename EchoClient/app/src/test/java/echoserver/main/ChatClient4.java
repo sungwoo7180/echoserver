@@ -11,12 +11,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class ChatClient {
+public class ChatClient4 {
     private static final String SERVER_ADDRESS = "localhost";
     private static final int SERVER_PORT = 12345;
     private static final ExecutorService executor = Executors.newCachedThreadPool();
-    private static final AtomicInteger threadCounter  = new AtomicInteger(1); // 스레드 번호 부여기
-    private static final Map<Long, Integer> threadIdMap = new ConcurrentHashMap<>();     // 실제 Thread ID -> 넘버링
+    private static final AtomicInteger threadCounter  = new AtomicInteger(1);
+    private static final Map<Long, Integer> threadIdMap = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
         try (SocketChannel channel = SocketChannel.open()) {
@@ -26,25 +26,22 @@ public class ChatClient {
 
             Scanner scanner = new Scanner(System.in);
 
-            // 닉네임 입력 및 전송
             while (true) {
                 System.out.print("닉네임을 입력하세요: ");
                 String nickname = scanner.nextLine().trim();
-                sendMessage(channel, nickname + "\n"); // \n 추가
+                sendMessage(channel, nickname + "\n");
 
                 String response = receiveMessage(channel);
                 if (response.contains("중복된 닉네임")) {
                     System.out.println("[서버 응답] " + response);
                 } else {
                     System.out.println("[서버 응답] " + response);
-                    break; // 성공적으로 등록됨
+                    break;
                 }
             }
 
-            // 서버 응답 수신 스레드 시작
             executor.submit(new ReaderThread(channel));
 
-            // 사용자 입력 → 메시지 전송
             while (true) {
                 System.out.print("> ");
                 String message = scanner.nextLine();
@@ -126,14 +123,12 @@ public class ChatClient {
 
         @Override
         public void run() {
-
             long threadId = Thread.currentThread().getId();
             int threadNum = threadIdMap.computeIfAbsent(threadId, id -> threadCounter.getAndIncrement());
             System.out.println("[Thread-" + threadNum + "] 메시지 전송 시작: " + message);
 
-
             try {
-                ByteBuffer buffer = ByteBuffer.wrap((message + "\n").getBytes()); // \n 추가
+                ByteBuffer buffer = ByteBuffer.wrap((message + "\n").getBytes());
                 while (buffer.hasRemaining()) {
                     channel.write(buffer);
                 }
@@ -142,4 +137,4 @@ public class ChatClient {
             }
         }
     }
-}
+} 

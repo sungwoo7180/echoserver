@@ -8,6 +8,7 @@
 plugins {
     // Apply the application plugin to add support for building a CLI application in Java.
     id 'application'
+    id "me.champeau.jmh" version "0.6.6"
 }
 
 repositories {
@@ -29,6 +30,9 @@ dependencies {
     annotationProcessor 'org.projectlombok:lombok:1.18.22'
     // Lombok 을 처리할 수 있는 플러그인 추가 (Optional)
     implementation 'org.projectlombok:lombok:1.18.22'
+
+    implementation 'org.openjdk.jmh:jmh-core:1.35'
+    jmhAnnotationProcessor 'org.openjdk.jmh:jmh-generator-annprocess:1.35'
 }
 
 // Apply a specific Java toolchain to ease working on different environments.
