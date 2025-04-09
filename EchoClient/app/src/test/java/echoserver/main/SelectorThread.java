@@ -25,6 +25,7 @@ public class SelectorThread implements Runnable {
                 Iterator<SelectionKey> iter = selector.selectedKeys().iterator();
                 while (iter.hasNext()) {
                     SelectionKey key = iter.next();
+                    System.out.println(key);
                     iter.remove();
 
                     if (!key.isValid()) {

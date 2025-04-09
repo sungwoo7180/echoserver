@@ -1,6 +1,7 @@
 package echoserver.main;
 
 import echoserver.main.domain.ClientInfo;
+import org.openjdk.jmh.annotations.*;
 
 import java.beans.Transient;
 import java.io.*;
@@ -15,6 +16,18 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
+// TODO : 성능 비교
+//   ChatServer 는 Client 종료시 FIN 패킷을 보내고 그거에 대한 EVENT 를 감지하면서 20~30 개의 KEY 가 쓸데 없이 ThreadPool 에 제출됨
+//   처음꺼로 인해서 Key 가 지워지면 나머지 제출된 Key 에 대해서 29번의 예외처리가 됨.
+//   물런 속도 면에서 굉장히 좋음. Key 처리 하는동안에도 계쏙 쌓임.
+//   ChatServer4 는 Key 를 처리하는 동안 추가적으로 키가 쌓이지 않음. 키 하나를 쓰레드가 다 처리하고 나서 그 이후에 Selector Key 를 인식함
+
+
+
+//@State(Scope.Benchmark)
+//@BenchmarkMode(Mode.AverageTime) // 벤치마크 대상 메소드를 실행하는 데 걸린 평균 시간 측정
+//@OutputTimeUnit(TimeUnit.MILLISECONDS) // 벤치마크 결과를 밀리초 단위로 출력
+//@Fork(value = 2, jvmArgs = {"-Xms4G", "-Xmx4G"}) // 4Gb의 힙 공간을 제공한 환경에서 두 번 벤치마크를 수행해 결과의 신뢰성 확보
 public class ChatServer {
     private static final int PORT = 12345;
     private static final int POOL_SIZE = 10;
@@ -33,7 +46,6 @@ public class ChatServer {
 
     public static void main(String[] args) {
 
-
         try (
                 ServerSocketChannel serverChannel = ServerSocketChannel.open();
                 Selector selector = Selector.open();
@@ -43,17 +55,18 @@ public class ChatServer {
             chatOutputStream = new FileOutputStream(TEXTPATH, true);
             onLoad();
 
-            serverChannel.bind(new InetSocketAddress(PORT));
-            serverChannel.configureBlocking(false);
+            serverChannel.bind(new InetSocketAddress(PORT), 350);
+            serverChannel.configureBlocking(false);                     // Non-blocking Mode 로 설정
             serverChannel.register(selector, SelectionKey.OP_ACCEPT);
 
             System.out.println("Chatting server started on port :" + PORT);
 
             while (true) {
-                selector.select(); // I/O 이벤트 대기
+                selector.select();                                      // I/O 이벤트 대기, 선택된 Key 가 없으면 무한히 대기.
                 Iterator<SelectionKey> iter = selector.selectedKeys().iterator();
                 while (iter.hasNext()) {
                     SelectionKey key = iter.next();
+                    System.out.println(key);
                     iter.remove(); // 현재 키 처리 예정이므로 목록에서 제거
 
                     if (!key.isValid()) {       // CancelledKeyException 방지 코드
@@ -72,7 +85,12 @@ public class ChatServer {
             System.err.println("I/O Error: " + e.getMessage());
         } finally {
             workerPool.shutdown();
-            // chatInputStream.close();
+            try {
+                if (nicknameOutputStream != null) nicknameOutputStream.close();
+                if (chatOutputStream != null) chatOutputStream.close();
+            } catch (IOException e) {
+                System.err.println("[ERROR] 파일 스트림 닫기 실패: " + e.getMessage());
+            }
         }
     }
 
@@ -96,7 +114,7 @@ public class ChatServer {
         SocketChannel clientChannel = server.accept();
 
         if (clientChannel != null) {
-            clientChannel.configureBlocking(false);
+            clientChannel.configureBlocking(false);                 // Non-blocking 모드로 설정. true 이면 register 에서 오류뜸.
             ClientInfo clientInfo = new ClientInfo(BUFFER_SIZE);
             clientChannel.register(selector, SelectionKey.OP_READ, clientInfo);
             System.out.println("[ACCEPT] 클라이언트 연결 수락: " + clientChannel.getRemoteAddress());
@@ -122,7 +140,7 @@ public class ChatServer {
 
         synchronized (key) {
             try {
-                int bytesRead = clientChannel.read(buffer);
+                int bytesRead = clientChannel.read(buffer);     // 읽을 수 없으면 0을 반환
                 if (bytesRead == -1) {
                     System.out.println("[Thread " + threadNum + "] 클라이언트 연결 종료: " + clientChannel.getRemoteAddress());
                     cleanupKey(key);
@@ -147,9 +165,11 @@ public class ChatServer {
                     String message = rawMsg.trim();
                     if (message.isEmpty()) continue;
 
-                    if (!clientInfo.isRegistered()) {
+                    // 1. 닉네임 등록 처리
+                    if (!clientInfo.isRegistered()) {           // 처음 접속 인지?
                         if (activeUsers.contains(message)) {
                             clientChannel.write(ByteBuffer.wrap("[SERVER] 중복된 닉네임입니다.\n".getBytes()));
+                            System.out.println("[Thread " + threadNum + "] 중복 닉네임 '" + message + "' 거부");
                             cleanupKey(key);
                             return;
                         }
@@ -163,6 +183,7 @@ public class ChatServer {
                             allUsers.add(message);
                             nicknameOutputStream.write((message + "\n").getBytes(StandardCharsets.UTF_8));
                             nicknameOutputStream.flush();
+                            System.out.println("[Thread " + threadNum + "] 신규 유저 '" + message + "' 닉네임 등록");
                         } else {
                             // 기존 유저 → history 20줄 전송
                             Stack<String> history = readChatHistoryReversed(TEXTPATH, 20);
@@ -170,26 +191,24 @@ public class ChatServer {
                                 String line = history.pop();
                                 clientChannel.write(ByteBuffer.wrap((line + "\n").getBytes()));
                             }
+                            System.out.println("[Thread " + threadNum + "] 기존 유저 '" + message + "' 히스토리 전송");
                         }
-
-                        System.out.println("[닉네임 등록] " + message);
                         clientChannel.write(ByteBuffer.wrap(("[SERVER] '" + message + "' 닉네임 등록 완료!\n").getBytes()));
-                    } else {
+                    } else { // 2. 일반 메시지 전송
                         String nickname = clientInfo.getNickname();
                         String timestamp = "[" + java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")) + "]";
                         String fullMessage =  nickname + ": " + message + " " + timestamp + "\n";
 
                         chatOutputStream.write(fullMessage.getBytes(StandardCharsets.UTF_8));
                         chatOutputStream.flush();
-                        System.out.println("[브로드캐스트] " + fullMessage.trim());
-
+                        System.out.println("[Thread " + threadNum + "] [브로드캐스트] " + fullMessage.trim());
                         broadcastToAllClients(key.selector(), fullMessage);
                     }
                 }
-
                 buffer.clear();
             } catch (IOException e) {
                 cleanupKey(key);
+                System.err.println("[ERROR] 읽기 중 예외 발생: " + e.getClass().getSimpleName() + " - " + e.getMessage());
             }
         }
     }
@@ -211,7 +230,18 @@ public class ChatServer {
         }
     }
 
-
+    /**
+     * 클라이언트 채널과 관련된 리소스를 정리합니다.
+     * 1. 닉네임이 등록된 경우 activeUsers 목록에서 제거합니다.
+     * 2. SelectionKey 를 cancel() 하여 Selector 의 대상에서 제거합니다.
+     * 3. 채널을 close()하여 리소스를 해제합니다.
+     * ※ 주의 사항:
+     * - ClientInfo 는 SelectionKey 의 attachment 로만 참조되므로,
+     *   key.cancel()과 channel.close() 이후에는 더 이상 참조되지 않아
+     *   GC(Garbage Collector)의 대상이 됩니다.
+     * - 별도로 ClientInfo 를 Map 등에 저장하고 있다면,
+     *   그 Map 에서도 remove 처리를 해주어야 메모리 누수를 방지할 수 있습니다.
+     */
     private static void cleanupKey(SelectionKey key) {
         try {
             SocketChannel channel = (SocketChannel) key.channel();

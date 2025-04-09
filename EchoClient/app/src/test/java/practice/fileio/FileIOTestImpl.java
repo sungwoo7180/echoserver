@@ -67,7 +67,7 @@ public class FileIOTestImpl {
 
         String line;
         while ((line = reader.readLine()) != null) {
-            // 한 줄씩 읽어서 ChatHistory로 변환하여 리스트에 추가
+            // 한 줄씩 읽어서 ChatHistory 로 변환하여 리스트에 추가
             String[] parts = line.split(" : ");
             if (parts.length == 2) {
                 String user = parts[0].trim();

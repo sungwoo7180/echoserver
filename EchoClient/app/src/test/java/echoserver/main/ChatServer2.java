@@ -159,6 +159,7 @@ public class ChatServer2 {
                 buffer.clear();
             } catch (IOException e) {
                 cleanupKey(key);
+                System.err.println("[ERROR] 읽기 중 예외 발생: " + e.getClass().getSimpleName() + " - " + e.getMessage());
             }
         }
     }

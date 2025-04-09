@@ -56,6 +56,7 @@ public class ChatServer4 {
                 Iterator<SelectionKey> iter = selector.selectedKeys().iterator();
                 while (iter.hasNext()) {
                     SelectionKey key = iter.next();
+                    System.out.println(key);
                     iter.remove(); // 현재 키 처리 예정이므로 목록에서 제거
 
                     if (!key.isValid()) {       // CancelledKeyException 방지 코드
@@ -73,6 +74,7 @@ public class ChatServer4 {
                             } finally {
                                 if (key.isValid()) {
                                     key.interestOps(SelectionKey.OP_READ);
+                                    key.selector().wakeup();
                                 }
                             }
                         });                    }
@@ -138,9 +140,10 @@ public class ChatServer4 {
 
         synchronized (key) {
             try {
+
                 int bytesRead = clientChannel.read(buffer);     // 읽을 수 없으면 0을 반환
                 if (bytesRead == -1) {
-                    System.out.println("[Thread " + threadNum + "] 클라이언interestOps트 연결 종료: " + clientChannel.getRemoteAddress());
+                    System.out.println("[Thread " + threadNum + "] 클라이언트 연결 종료: " + clientChannel.getRemoteAddress());
                     cleanupKey(key);
                     return;
                 } else if (bytesRead == 0) {
