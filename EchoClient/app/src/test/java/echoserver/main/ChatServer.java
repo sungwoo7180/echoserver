@@ -61,12 +61,27 @@ public class ChatServer {
 
             System.out.println("Chatting server started on port :" + PORT);
 
+            int loopCount = 0;
             while (true) {
-                selector.select();                                      // I/O 이벤트 대기, 선택된 Key 가 없으면 무한히 대기.
+                System.out.println("\n[LOOP " + loopCount + "] selector.select() 진입");
+
+                // Non Blocking I/O 인 이유 : 준비된 채널만 선택 → 제어권을 절대 양도하지 않음
+                // Selector 은 감지할 이벤트가 없으면 기다림 : blocking, I/O 자체는 절대 Block 되지 않음.
+                selector.select();                             // I/O 이벤트 대기, 선택된 Key 가 없으면 무한히 대기.
                 Iterator<SelectionKey> iter = selector.selectedKeys().iterator();
+
+                int keyCount = 0;
                 while (iter.hasNext()) {
                     SelectionKey key = iter.next();
-                    System.out.println(key);
+                    System.out.println("[LOOP " + loopCount + "] 처리 중인 Key #" + keyCount);
+                    System.out.println("  ↳ Key Info: " + key);
+                    System.out.println("  ↳ Channel: " + key.channel());
+                    System.out.println("  ↳ isValid: " + key.isValid() + ", isReadable: " + key.isReadable());
+                                                                       /* TODO : 디버깅 했을 때와 디버깅 하지 않았을 때 결과값이 다름.
+                                                                           디버깅 하지 않았을 때(일반실행) - 하나의 이벤트 감지에 여러 키값이 들어감.
+                                                                           디버깅 했을 때 - 하나의 키값만 들어옴
+                                                                        */
+                    keyCount++;
                     iter.remove(); // 현재 키 처리 예정이므로 목록에서 제거
 
                     if (!key.isValid()) {       // CancelledKeyException 방지 코드
@@ -80,6 +95,7 @@ public class ChatServer {
                         workerPool.submit(() -> handleReadWrite(key));
                     }
                 }
+                loopCount++;
             }
         } catch (IOException e) {
             System.err.println("I/O Error: " + e.getMessage());
