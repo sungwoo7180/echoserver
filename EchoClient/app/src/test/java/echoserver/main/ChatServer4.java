@@ -56,6 +56,7 @@ public class ChatServer4 {
                 Iterator<SelectionKey> iter = selector.selectedKeys().iterator();
                 while (iter.hasNext()) {
                     SelectionKey key = iter.next();
+                    System.out.println(key);
                     iter.remove(); // 현재 키 처리 예정이므로 목록에서 제거
 
                     if (!key.isValid()) {       // CancelledKeyException 방지 코드
@@ -73,9 +74,11 @@ public class ChatServer4 {
                             } finally {
                                 if (key.isValid()) {
                                     key.interestOps(SelectionKey.OP_READ);
+                                    key.selector().wakeup();
                                 }
                             }
-                        });                    }
+                        });
+                    }
                 }
             }
         } catch (IOException e) {
@@ -138,9 +141,10 @@ public class ChatServer4 {
 
         synchronized (key) {
             try {
+
                 int bytesRead = clientChannel.read(buffer);     // 읽을 수 없으면 0을 반환
                 if (bytesRead == -1) {
-                    System.out.println("[Thread " + threadNum + "] 클라이언interestOps트 연결 종료: " + clientChannel.getRemoteAddress());
+                    System.out.println("[Thread " + threadNum + "] 클라이언트 연결 종료: " + clientChannel.getRemoteAddress());
                     cleanupKey(key);
                     return;
                 } else if (bytesRead == 0) {
@@ -167,11 +171,11 @@ public class ChatServer4 {
                     if (message.isEmpty()) continue;
 
                     // 1. 닉네임 등록 처리
-                    if (!clientInfo.isRegistered()) {           // 처음 접속 인지?
+                    if (!clientInfo.isRegistered()) {           // case1 처음 접속 인지?
                         if (activeUsers.contains(message)) {
                             clientChannel.write(ByteBuffer.wrap("[SERVER] 중복된 닉네임입니다.\n".getBytes()));
                             System.out.println("[Thread " + threadNum + "] 중복 닉네임 '" + message + "' 거부");
-                            cleanupKey(key);
+                            buffer.clear();
                             return;
                         }
 
@@ -179,14 +183,14 @@ public class ChatServer4 {
                         clientInfo.setRegistered(true);
                         activeUsers.add(message);
 
-                        // 신규 유저는 history X
+                        // case 2 신규 유저는 history X
                         if (!allUsers.contains(message)) {
                             allUsers.add(message);
                             nicknameOutputStream.write((message + "\n").getBytes(StandardCharsets.UTF_8));
                             nicknameOutputStream.flush();
                             System.out.println("[Thread " + threadNum + "] 신규 유저 '" + message + "' 닉네임 등록");
                         } else {
-                            // 기존 유저 → history 20줄 전송
+                            // case 3 기존 유저 → history 20줄 전송
                             Stack<String> history = readChatHistoryReversed(TEXTPATH, 20);
                             while (!history.isEmpty()) {                    // 향상된 For 문 쓰면 안됨. List 처럼 똑같이 반환함.
                                 String line = history.pop();
@@ -196,6 +200,10 @@ public class ChatServer4 {
                         }
                         clientChannel.write(ByteBuffer.wrap(("[SERVER] '" + message + "' 닉네임 등록 완료!\n").getBytes()));
                     } else { // 2. 일반 메시지 전송
+                        if (handleCommand(message, clientInfo, key.selector())) {
+                            return;
+                        }
+
                         String nickname = clientInfo.getNickname();
                         String timestamp = "[" + java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")) + "]";
                         String fullMessage =  nickname + ": " + message + " " + timestamp + "\n";
@@ -214,6 +222,20 @@ public class ChatServer4 {
                 throw new RuntimeException(e);
             }
         }
+    }
+
+    private static boolean handleCommand(String message, ClientInfo clientInfo, Selector selector) throws IOException {
+        String nickname = clientInfo.getNickname();
+
+        if ("/shutdown".equalsIgnoreCase(message) && "ADMIN".equalsIgnoreCase(nickname)) {
+            String notice = "[SERVER] 서버가 관리자에 의해 종료됩니다.\n";
+            broadcastToAllClients(selector, notice);
+            System.out.println("[COMMAND] 서버 종료 명령 수신됨 → System.exit(0)");
+            System.exit(0);
+            return true;
+        }
+
+        return false;
     }
 
     private static void broadcastToAllClients(Selector selector, String message) {

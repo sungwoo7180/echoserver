@@ -7,33 +7,28 @@ import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.*;
 import java.nio.charset.StandardCharsets;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class ChatServer5 {
     private static final int PORT = 12345;
-    private static final int POOL_SIZE = 10;
     private static final int BUFFER_SIZE = 1024;
-
     private static final String TEXTPATH = "app/src/test/java/echoserver/main/text/chathistory.txt";
     private static final String NICKNAMEPATH = "app/src/test/java/echoserver/main/text/nickname.txt";
 
-    private static final ExecutorService workerPool = Executors.newFixedThreadPool(POOL_SIZE);
+    private static final ExecutorService workerPool = Executors.newCachedThreadPool();
     private static final AtomicInteger threadCounter = new AtomicInteger(1);
     private static final Map<Long, Integer> threadIdMap = new ConcurrentHashMap<>();
     private static final Set<String> allUsers = new ConcurrentSkipListSet<>();
     private static final Set<String> activeUsers = new ConcurrentSkipListSet<>();
-
     private static FileOutputStream nicknameOutputStream;
     private static FileOutputStream chatOutputStream;
 
     public static void main(String[] args) {
         try (
                 ServerSocketChannel serverChannel = ServerSocketChannel.open();
-                Selector selector = Selector.open()
+                Selector selector = Selector.open();
         ) {
             nicknameOutputStream = new FileOutputStream(NICKNAMEPATH, true);
             chatOutputStream = new FileOutputStream(TEXTPATH, true);
@@ -43,11 +38,12 @@ public class ChatServer5 {
             serverChannel.configureBlocking(false);
             serverChannel.register(selector, SelectionKey.OP_ACCEPT);
 
-            System.out.println("Chatting server started on port: " + PORT);
+            System.out.println("ChatServer5 started on port " + PORT);
 
             while (true) {
                 selector.select();
                 Iterator<SelectionKey> iter = selector.selectedKeys().iterator();
+
                 while (iter.hasNext()) {
                     SelectionKey key = iter.next();
                     iter.remove();
@@ -62,22 +58,35 @@ public class ChatServer5 {
                             try {
                                 handleReadWrite(key);
                             } finally {
-                                if (key.isValid()) key.interestOps(SelectionKey.OP_READ);
+                                if (key.isValid()) {
+                                    key.interestOps(SelectionKey.OP_READ);
+                                    key.selector().wakeup();
+                                }
                             }
                         });
                     }
                 }
             }
+
         } catch (IOException e) {
-            System.err.println("[SERVER ERROR] I/O: " + e.getMessage());
+            System.err.println("서버 오류: " + e.getMessage());
         } finally {
             workerPool.shutdown();
             try {
                 if (nicknameOutputStream != null) nicknameOutputStream.close();
                 if (chatOutputStream != null) chatOutputStream.close();
-            } catch (IOException e) {
-                System.err.println("[ERROR] 파일 스트림 닫기 실패: " + e.getMessage());
+            } catch (IOException ignore) {}
+        }
+    }
+
+    private static void onLoad() {
+        try (BufferedReader reader = new BufferedReader(new FileReader(NICKNAMEPATH))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                allUsers.add(line.trim());
             }
+        } catch (IOException e) {
+            System.err.println("[onLoad ERROR] 닉네임 로드 실패: " + e.getMessage());
         }
     }
 
@@ -88,7 +97,7 @@ public class ChatServer5 {
             clientChannel.configureBlocking(false);
             ClientInfo clientInfo = new ClientInfo(BUFFER_SIZE);
             clientChannel.register(selector, SelectionKey.OP_READ, clientInfo);
-            System.out.println("[ACCEPT] 클라이언트 연결 수락: " + clientChannel.getRemoteAddress());
+            System.out.println("[ACCEPT] 클라이언트 접속: " + clientChannel.getRemoteAddress());
         }
     }
 
@@ -104,7 +113,6 @@ public class ChatServer5 {
             try {
                 int bytesRead = clientChannel.read(buffer);
                 if (bytesRead == -1) {
-                    System.out.println("[Thread " + threadNum + "] 클라이언트 연결 종료: " + clientChannel.getRemoteAddress());
                     cleanupKey(key);
                     return;
                 } else if (bytesRead == 0) {
@@ -116,17 +124,19 @@ public class ChatServer5 {
                 buffer.get(bytes);
                 String[] messages = new String(bytes, StandardCharsets.UTF_8).split("\n");
 
-                for (String rawMsg : messages) {
-                    String message = rawMsg.trim();
+                for (String msg : messages) {
+                    String message = msg.trim();
                     if (message.isEmpty()) continue;
 
                     if (!clientInfo.isRegistered()) {
                         if (activeUsers.contains(message)) {
-                            clientChannel.write(ByteBuffer.wrap("[SERVER] 중복된 닉네임입니다.\n".getBytes()));
-                            System.out.println("[Thread " + threadNum + "] 중복 닉네임 '" + message + "' 거부");
+                            clientChannel.write(ByteBuffer.wrap("[SERVER] 중복된 닉네임입니다. 3초 후 연결 종료.\n".getBytes()));
+                            clientChannel.socket().shutdownOutput();
+                            Thread.sleep(3000);
                             cleanupKey(key);
                             return;
                         }
+
                         clientInfo.setNickname(message);
                         clientInfo.setRegistered(true);
                         activeUsers.add(message);
@@ -135,44 +145,51 @@ public class ChatServer5 {
                             allUsers.add(message);
                             nicknameOutputStream.write((message + "\n").getBytes(StandardCharsets.UTF_8));
                             nicknameOutputStream.flush();
-                            System.out.println("[Thread " + threadNum + "] 신규 유저 '" + message + "' 등록");
                         } else {
                             Stack<String> history = readChatHistoryReversed(TEXTPATH, 20);
-                            while (!history.isEmpty()) {
-                                clientChannel.write(ByteBuffer.wrap((history.pop() + "\n").getBytes()));
+                            for (String line : history) {
+                                clientChannel.write(ByteBuffer.wrap((line + "\n").getBytes()));
                             }
-                            System.out.println("[Thread " + threadNum + "] 기존 유저 '" + message + "' 히스토리 전송 완료");
                         }
                         clientChannel.write(ByteBuffer.wrap(("[SERVER] '" + message + "' 닉네임 등록 완료!\n").getBytes()));
                     } else {
+                        if (handleCommand(message, clientInfo, key.selector())) return;
+
                         String nickname = clientInfo.getNickname();
-                        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-                        String fullMessage = nickname + ": " + message + " [" + timestamp + "]\n";
+                        String timestamp = "[" + java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")) + "]";
+                        String fullMessage = nickname + ": " + message + " " + timestamp + "\n";
 
                         chatOutputStream.write(fullMessage.getBytes(StandardCharsets.UTF_8));
                         chatOutputStream.flush();
-                        System.out.println("[Thread " + threadNum + "] [브로드캐스트] " + fullMessage.trim());
                         broadcastToAllClients(key.selector(), fullMessage);
                     }
                 }
+
                 buffer.clear();
-            } catch (IOException e) {
-                System.err.println("[Thread " + threadNum + "] [ERROR] 읽기 중 예외 발생: " + e.getMessage());
+            } catch (Exception e) {
                 cleanupKey(key);
             }
         }
     }
 
+    private static boolean handleCommand(String message, ClientInfo clientInfo, Selector selector) throws IOException {
+        String nickname = clientInfo.getNickname();
+        if ("/shutdown".equalsIgnoreCase(message) && "ADMIN".equalsIgnoreCase(nickname)) {
+            broadcastToAllClients(selector, "[SERVER] 서버가 관리자에 의해 종료됩니다.\n");
+            System.out.println("[COMMAND] 관리자 서버 종료 실행됨");
+            System.exit(0);
+            return true;
+        }
+        return false;
+    }
+
     private static void broadcastToAllClients(Selector selector, String message) {
-        ByteBuffer broadcastBuffer = ByteBuffer.wrap(message.getBytes(StandardCharsets.UTF_8));
+        ByteBuffer buffer = ByteBuffer.wrap(message.getBytes(StandardCharsets.UTF_8));
         for (SelectionKey key : selector.keys()) {
             if (key.channel() instanceof SocketChannel && key.isValid()) {
                 try {
-                    SocketChannel sc = (SocketChannel) key.channel();
-                    broadcastBuffer.rewind();
-                    sc.write(broadcastBuffer);
+                    ((SocketChannel) key.channel()).write(buffer.duplicate());
                 } catch (IOException e) {
-                    System.err.println("[BROADCAST ERROR] 클라이언트 전송 실패");
                     cleanupKey(key);
                 }
             }
@@ -183,36 +200,19 @@ public class ChatServer5 {
         try {
             SocketChannel channel = (SocketChannel) key.channel();
             ClientInfo info = (ClientInfo) key.attachment();
-
             if (info != null && info.getNickname() != null) {
                 activeUsers.remove(info.getNickname());
-                System.out.println("[CLEANUP] '" + info.getNickname() + "' 제거 완료");
             }
-
-            System.out.println("[CLEANUP] 연결 종료: " + channel.getRemoteAddress());
-            key.cancel();
             channel.close();
-        } catch (IOException e) {
-            System.err.println("[CLEANUP ERROR] " + e.getMessage());
-        }
+            key.cancel();
+            System.out.println("[CLEANUP] 연결 종료됨");
+        } catch (IOException ignore) {}
     }
 
-    private static void onLoad() {
-        try (BufferedReader reader = new BufferedReader(new FileReader(NICKNAMEPATH))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                allUsers.add(line.trim());
-            }
-            System.out.println("Loaded " + allUsers.size() + " historical nicknames");
-        } catch (Exception e) {
-            System.err.println("[onLoad ERROR] 닉네임 로드 실패: " + e.getMessage());
-        }
-    }
-
-    public static Stack<String> readChatHistoryReversed(String filePath, int numberOfLines) throws IOException {
+    private static Stack<String> readChatHistoryReversed(String filePath, int numberOfLines) throws IOException {
+        Stack<String> stack = new Stack<>();
         RandomAccessFile raf = new RandomAccessFile(filePath, "r");
         long pointer = raf.length() - 1;
-        Stack<String> stack = new Stack<>();
         ByteArrayOutputStream lineBuffer = new ByteArrayOutputStream();
 
         while (pointer >= 0 && stack.size() < numberOfLines) {
@@ -232,6 +232,7 @@ public class ChatServer5 {
             byte[] lineBytes = reverseBytes(lineBuffer.toByteArray());
             stack.push(new String(lineBytes, StandardCharsets.UTF_8).trim());
         }
+
         raf.close();
         return stack;
     }
