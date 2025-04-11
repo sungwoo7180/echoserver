@@ -1,12 +1,17 @@
 package echoserver.main.domain;
 
-import lombok.Getter;
-import lombok.Setter;
+// TODO 리눅스환경에서 배포할때 어떻게 처리 해야 할지 고민
+// gradle 인 경우 Maven 인 경우 쌩 이클립스 프로젝트인 경우
+// Library 같은 경우에는 추가해주면 될 것 같은데
+// import lombok.Getter;
+// import lombok.Setter;
+
+
 
 import java.nio.ByteBuffer;
 
-@Getter
-@Setter
+// @Getter
+// @Setter
 public class ClientInfo {
     private String nickname;
     private boolean registered;

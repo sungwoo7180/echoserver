@@ -42,7 +42,6 @@ public class ChatHistoryReaderProblem {
                 sb = new StringBuilder();  // 다음 줄을 읽기 위한 초기화
                 lineCount++;
             }
-
             pointer--;
         }
 
@@ -56,7 +55,7 @@ public class ChatHistoryReaderProblem {
     }
 
     private static String decodeByteBuffer(ByteBuffer byteBuffer, CharsetDecoder decoder) throws IOException {
-        // ByteBuffer를 디코딩하여 UTF-8로 변환
+        // ByteBuffer 를 디코딩하여 UTF-8로 변환
         CharBuffer charBuffer = CharBuffer.allocate(1024);  // CharBuffer 생성
         decoder.decode(byteBuffer, charBuffer, true);  // ByteBuffer를 CharBuffer로 디코딩
         charBuffer.flip();  // CharBuffer 내용 플립

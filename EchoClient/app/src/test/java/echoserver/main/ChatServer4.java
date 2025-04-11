@@ -1,7 +1,6 @@
 package echoserver.main;
 
 import echoserver.main.domain.ClientInfo;
-import org.openjdk.jmh.annotations.*;
 
 import java.io.*;
 import java.net.InetSocketAddress;
@@ -15,19 +14,21 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
-@State(Scope.Benchmark)
-@BenchmarkMode(Mode.AverageTime) // 벤치마크 대상 메소드를 실행하는 데 걸린 평균 시간 측정
-@OutputTimeUnit(TimeUnit.MILLISECONDS) // 벤치마크 결과를 밀리초 단위로 출력
-@Fork(value = 2, jvmArgs = {"-Xms4G", "-Xmx4G"}) // 4Gb의 힙 공간을 제공한 환경에서 두 번 벤치마크를 수행해 결과의 신뢰성 확보
 public class ChatServer4 {
     private static final int PORT = 12345;
     private static final int POOL_SIZE = 10;
     private static final int BUFFER_SIZE = 1024;
 
+//    private static final String TEXTPATH = "echoserver/main/text/chathistory.txt";
+//    private static final String NICKNAMEPATH = "echoserver/main/text/nickname.txt";
     private static final String TEXTPATH = "app/src/test/java/echoserver/main/text/chathistory.txt";
     private static final String NICKNAMEPATH = "app/src/test/java/echoserver/main/text/nickname.txt";
 
-    private static final ExecutorService workerPool = Executors.newCachedThreadPool();
+    // Cached 가 일반적으로 좋은 선택 무거운 프로덕션 서버에는 좋지 못함.
+    //private static final ExecutorService workerPool = Executors.newCachedThreadPool();
+
+    //
+    private static final ExecutorService workerPool = Executors.newFixedThreadPool(POOL_SIZE);
     private static final AtomicInteger threadCounter = new AtomicInteger(1);    // 스레드 번호 부여기
     private static final Map<Long, Integer> threadIdMap = new ConcurrentHashMap<>();     // 실제 Thread ID -> 넘버링
     private static final Set<String> allUsers = new ConcurrentSkipListSet<>();
@@ -211,7 +212,7 @@ public class ChatServer4 {
                         chatOutputStream.write(fullMessage.getBytes(StandardCharsets.UTF_8));
                         chatOutputStream.flush();
                         System.out.println("[Thread " + threadNum + "] [브로드캐스트] " + fullMessage.trim());
-                        broadcastToAllClients(key.selector(), fullMessage);
+                        broadcastToAllClients(key.selector(), fullMessage, key, threadNum);
                     }
                 }
                 buffer.clear();
@@ -238,6 +239,24 @@ public class ChatServer4 {
         return false;
     }
 
+    // TODO : 채팅을 보낸 애한테도 똑같이 보내는 구조
+    private static void broadcastToAllClients(Selector selector, String message, SelectionKey senderKey, int threadNum) {
+        ByteBuffer broadcastBuffer = ByteBuffer.wrap(message.getBytes(StandardCharsets.UTF_8));
+        System.out.println("[Thread " + threadNum + "] broadcastToAllClients() 진입");
+        for (SelectionKey key : selector.keys()) {
+            if (key.channel() instanceof SocketChannel && key.isValid()) {
+                try {
+                    SocketChannel sc = (SocketChannel) key.channel();
+                    broadcastBuffer.rewind(); // 다시 읽을 수 있도록 rewind
+                    sc.write(broadcastBuffer);
+                } catch (IOException e) {
+                    System.err.println("[BROADCAST ERROR] 클라이언트 전송 실패");
+                    cleanupKey(key);
+                }
+            }
+        }
+    }
+
     private static void broadcastToAllClients(Selector selector, String message) {
         ByteBuffer broadcastBuffer = ByteBuffer.wrap(message.getBytes(StandardCharsets.UTF_8));
 
@@ -254,7 +273,6 @@ public class ChatServer4 {
             }
         }
     }
-
 
     private static void cleanupKey(SelectionKey key) {
         try {
