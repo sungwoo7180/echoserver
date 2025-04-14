@@ -12,7 +12,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class NioEchoServer2 {
-    private static final int PORT = 12345; // 서버가 사용할 포트 번호
+    private static final int PORT = 12346; // 서버가 사용할 포트 번호
     private static final int BUFFER_SIZE = 10000000; // 버퍼 크기 설정
     private static final int WORKER_THREADS = 10; // 작업자(Worker) 스레드 개수 ( 2개 Read, 2개 Write )
     private static final int READ_THREADS = 5;  // Read 전용 스레드 수

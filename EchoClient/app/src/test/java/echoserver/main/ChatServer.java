@@ -60,7 +60,7 @@ public class ChatServer {
             serverChannel.register(selector, SelectionKey.OP_ACCEPT);
 
             System.out.println("Chatting server started on port :" + PORT);
-
+            int i = 0;
             int loopCount = 0;
             while (true) {
                 System.out.println("\n[LOOP " + loopCount + "] selector.select() 진입");
@@ -69,7 +69,7 @@ public class ChatServer {
                 // Selector 은 감지할 이벤트가 없으면 기다림 : blocking, I/O 자체는 절대 Block 되지 않음.
                 selector.select();                             // I/O 이벤트 대기, 선택된 Key 가 없으면 무한히 대기.
                 Iterator<SelectionKey> iter = selector.selectedKeys().iterator();
-
+                System.out.println("selector select() count : " + i++);
                 int keyCount = 0;
                 while (iter.hasNext()) {
                     SelectionKey key = iter.next();

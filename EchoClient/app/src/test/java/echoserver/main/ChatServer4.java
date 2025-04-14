@@ -40,7 +40,7 @@ public class ChatServer4 {
 
         try (
                 ServerSocketChannel serverChannel = ServerSocketChannel.open();
-                Selector selector = Selector.open();
+                Selector selector = Selector.open()
         ) {
             nicknameOutputStream = new FileOutputStream(NICKNAMEPATH, true);
             chatOutputStream = new FileOutputStream(TEXTPATH, true);
@@ -51,13 +51,23 @@ public class ChatServer4 {
             serverChannel.register(selector, SelectionKey.OP_ACCEPT);
 
             System.out.println("Chatting server started on port :" + PORT);
-
+            int i = 0;
+            int loopCount = 0;
             while (true) {
-                selector.select();                                      // I/O 이벤트 대기, 선택된 Key 가 없으면 무한히 대기.
+                // 채널은 작업 준비 전까지 스레드를 블로킹 하지 않음.
+                // 대신 selector 이 블로킹 됨. 제어권은 OS 커널에 있음.
+                selector.select();      // I/O 이벤트 대기, 선택된 Key 가 없으면 무한히 대기(Blocking), Selector 은 제어권을 누구한테 주지? -> 운영체제 커널
                 Iterator<SelectionKey> iter = selector.selectedKeys().iterator();
+                System.out.println("selector select() count : " + i++);
+
+                int keyCount = 0;
                 while (iter.hasNext()) {
                     SelectionKey key = iter.next();
-                    System.out.println(key);
+                    System.out.println("[LOOP " + loopCount + "] 처리 중인 Key #" + keyCount);
+                    System.out.println("  ↳ Key Info: " + key);
+                    System.out.println("  ↳ Channel: " + key.channel());
+                    System.out.println("  ↳ isValid: " + key.isValid() + ", isReadable: " + key.isReadable());
+                    keyCount++;
                     iter.remove(); // 현재 키 처리 예정이므로 목록에서 제거
 
                     if (!key.isValid()) {       // CancelledKeyException 방지 코드
@@ -69,18 +79,34 @@ public class ChatServer4 {
                         handleAccept(key, selector);
                     } else if (key.isReadable()) {
                         key.interestOps(0);
-                        workerPool.submit(() -> {
+                        // NonBlocking I/O : 제어권 넘기지 않고 바로 반환 - 기다리지 않음.
+                        // 비동기 : thread 에서 작업이 끝나면 callback 호출
+                        workerPool.submit(() -> {     // return 값 : Future<?>
                             try {
-                                handleReadWrite(key);
+                                handleReadWrite(key);       // <1>
                             } finally {
-                                if (key.isValid()) {
+                                if (key.isValid()) {        // <2>
                                     key.interestOps(SelectionKey.OP_READ);
                                     key.selector().wakeup();
                                 }
                             }
                         });
+//                        workerPool.submit(new Runnable() {
+//                            @Override
+//                            public void run() {
+//                                try {
+//                                    handleReadWrite(key);
+//                                } finally {
+//                                    if (key.isValid()) {
+//                                        key.interestOps(SelectionKey.OP_READ);
+//                                        key.selector().wakeup();
+//                                    }
+//                                }
+//                            }
+//                        });
                     }
                 }
+                loopCount++;
             }
         } catch (IOException e) {
             System.err.println("I/O Error: " + e.getMessage());
@@ -172,8 +198,8 @@ public class ChatServer4 {
                     if (message.isEmpty()) continue;
 
                     // 1. 닉네임 등록 처리
-                    if (!clientInfo.isRegistered()) {           // case1 처음 접속 인지?
-                        if (activeUsers.contains(message)) {
+                    if (!clientInfo.isRegistered()) {
+                        if (activeUsers.contains(message)) {     // CASE 1 : 중복 닉네임
                             clientChannel.write(ByteBuffer.wrap("[SERVER] 중복된 닉네임입니다.\n".getBytes()));
                             System.out.println("[Thread " + threadNum + "] 중복 닉네임 '" + message + "' 거부");
                             buffer.clear();
@@ -184,14 +210,14 @@ public class ChatServer4 {
                         clientInfo.setRegistered(true);
                         activeUsers.add(message);
 
-                        // case 2 신규 유저는 history X
+                        // CASE 2 : 신규 유저는 chat_history X
                         if (!allUsers.contains(message)) {
                             allUsers.add(message);
                             nicknameOutputStream.write((message + "\n").getBytes(StandardCharsets.UTF_8));
                             nicknameOutputStream.flush();
                             System.out.println("[Thread " + threadNum + "] 신규 유저 '" + message + "' 닉네임 등록");
                         } else {
-                            // case 3 기존 유저 → history 20줄 전송
+                            // CASE 3 : 기존 유저 → history 20줄 전송
                             Stack<String> history = readChatHistoryReversed(TEXTPATH, 20);
                             while (!history.isEmpty()) {                    // 향상된 For 문 쓰면 안됨. List 처럼 똑같이 반환함.
                                 String line = history.pop();
